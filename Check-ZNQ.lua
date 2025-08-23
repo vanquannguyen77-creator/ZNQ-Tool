@@ -15,7 +15,7 @@ if not getgenv().disable_ui then
 	kX6eRq2Zd7M.TextScaled = true
 	kX6eRq2Zd7M.BackgroundTransparency = 1
 	kX6eRq2Zd7M.TextStrokeTransparency = 0
-	kX6eRq2Zd7M.Text = "Nexus Hideout"
+	kX6eRq2Zd7M.Text = "ZNQ-Manager"
 
 	local yM5wKv3Dp1C, xL8qTa9Gf4E, hS0zBr7Wx2U = 0, tick(), 0
 	rA1pB7eKz6Q.RenderStepped:Connect(function(oH3vN1cLj8Y)
