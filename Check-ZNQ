@@ -1,71 +1,112 @@
-local ZdqFiPHaYrt = game:GetService("HttpService")
-local SGJvTXuLkNA = game:GetService("Players").LocalPlayer
-local EoBVWnUPxyC = http_request or request or (syn and syn.request)
-if not EoBVWnUPxyC then return end
+-- ZNQ MAIN FILE Writer - Heartbeat <UserId>.main
+-- Yêu cầu executor có: isfile / readfile / writefile / delfile / appendfile
 
-if not getgenv().disable_ui then
-	local rA1pB7eKz6Q = game:GetService("RunService")
-	local dP2xV4lMn3J = game:GetService("Players")
-	local bT9sN8oFw0L = dP2xV4lMn3J.LocalPlayer
-
-	local kX6eRq2Zd7M = Instance.new("TextLabel", Instance.new("ScreenGui", game.CoreGui))
-	kX6eRq2Zd7M.Size = UDim2.new(0, 300, 0, 50)
-	kX6eRq2Zd7M.Position = UDim2.new(0, 10, 0, 10)
-	kX6eRq2Zd7M.Font = Enum.Font.FredokaOne
-	kX6eRq2Zd7M.TextScaled = true
-	kX6eRq2Zd7M.BackgroundTransparency = 1
-	kX6eRq2Zd7M.TextStrokeTransparency = 0
-	kX6eRq2Zd7M.Text = "Nexus Hideout"
-
-	local yM5wKv3Dp1C, xL8qTa9Gf4E, hS0zBr7Wx2U = 0, tick(), 0
-	rA1pB7eKz6Q.RenderStepped:Connect(function(oH3vN1cLj8Y)
-		hS0zBr7Wx2U = (hS0zBr7Wx2U + oH3vN1cLj8Y * 0.5) % 1
-		kX6eRq2Zd7M.TextColor3 = Color3.fromHSV(hS0zBr7Wx2U, 1, 1)
-		yM5wKv3Dp1C += 1
-		local gQ4nUf6Ey0S = tick()
-		if gQ4nUf6Ey0S - xL8qTa9Gf4E >= 1 then
-			kX6eRq2Zd7M.Text = ("%s, FPS: %d"):format(bT9sN8oFw0L.Name, yM5wKv3Dp1C / (gQ4nUf6Ey0S - xL8qTa9Gf4E))
-			yM5wKv3Dp1C, xL8qTa9Gf4E = 0, gQ4nUf6Ey0S
-		end
-	end)
-end
-
-local LGiDpqakOXv
 do
-	local GRgksoCmzYH, KeJPhVXMQnf = pcall(function()
-		return EoBVWnUPxyC({
-			Url = "https://users.roblox.com/v1/usernames/users",
-			Method = "POST",
-			Headers = {
-				["Content-Type"] = "application/json"
-			},
-			Body = ZdqFiPHaYrt:JSONEncode({
-				usernames = { SGJvTXuLkNA.Name },
-				excludeBannedUsers = true
-			})
-		})
-	end)
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local lp = Players.LocalPlayer
+    if not lp then return warn("[ZNQ] LocalPlayer chưa sẵn sàng") end
 
-	if not GRgksoCmzYH or not KeJPhVXMQnf or not KeJPhVXMQnf.Success or not KeJPhVXMQnf.Body then return end
+    -- ========== Tùy chọn ==========
+    -- Chu kỳ ghi (giây). Ví dụ: set trước khi inject -> getgenv().main_file_interval = 2
+    local INTERVAL = tonumber(getgenv().main_file_interval) or 1
+    -- Tự xóa file trước khi ghi (true: xóa rồi ghi lại để luôn “mới”)
+    local AUTODELETE = (getgenv().main_file_autodelete ~= false)  -- default true
+    -- Bật/tắt overlay FPS (default: tắt). Muốn bật: getgenv().disable_ui = false
+    if getgenv().disable_ui == nil then getgenv().disable_ui = true end
+    -- ===============================
 
-	local BXpZbkmYvFc, SqRgNjCvKML = pcall(ZdqFiPHaYrt.JSONDecode, ZdqFiPHaYrt, KeJPhVXMQnf.Body)
-	if not BXpZbkmYvFc or typeof(SqRgNjCvKML) ~= "table" or typeof(SqRgNjCvKML.data) ~= "table" then return end
+    -- ======= API file wrapper cho executor =======
+    local function has(fn) return typeof(getfenv()[fn]) == "function" end
 
-	local sGfdAKTwpxL = SqRgNjCvKML.data[1]
-	if not sGfdAKTwpxL or typeof(sGfdAKTwpxL) ~= "table" or typeof(sGfdAKTwpxL.id) ~= "number" then return end
+    local function file_exists(path)
+        if has("isfile") then
+            return isfile(path)
+        else
+            local ok = pcall(function() readfile(path) end)
+            return ok
+        end
+    end
 
-	LGiDpqakOXv = sGfdAKTwpxL.id
+    local function write_file(path, content)
+        if has("writefile") then
+            return writefile(path, content)
+        elseif has("appendfile") then
+            if has("delfile") and file_exists(path) then pcall(delfile, path) end
+            return appendfile(path, content)
+        else
+            error("[ZNQ] Executor không hỗ trợ writefile/appendfile")
+        end
+    end
+
+    local function delete_file(path)
+        if has("delfile") then pcall(delfile, path) end
+    end
+    -- =============================================
+
+    local userId = lp.UserId
+    local filename = tostring(userId) .. ".main"
+
+    -- Hàm dựng nội dung
+    local function build_content()
+        -- Ưu tiên nội dung custom do bạn cấp:
+        -- getgenv().main_file_content = "ALIVE"  -- hoặc một function(lp) -> string
+        local custom = getgenv().main_file_content
+        if type(custom) == "function" then
+            local ok, val = pcall(custom, lp)
+            if ok and type(val) == "string" then return val end
+        elseif type(custom) == "string" then
+            return custom
+        end
+        -- Mặc định: ghi heartbeat đầy đủ
+        local ts = os.time()
+        local placeId = tostring(game.PlaceId or "")
+        local jobId = tostring(game.JobId or "")
+        local uname = lp.Name or ""
+        return string.format("UID=%s|NAME=%s|PLACE=%s|JOB=%s|TS=%d", userId, uname, placeId, jobId, ts)
+    end
+
+    -- (Tuỳ chọn) Overlay FPS rất nhẹ (mặc định tắt)
+    if not getgenv().disable_ui then
+        local gui_ok, gui_err = pcall(function()
+            local sg = Instance.new("ScreenGui")
+            sg.Name = "ZNQ_FPS_Overlay"
+            sg.ResetOnSpawn = false
+            sg.Parent = game:GetService("CoreGui")
+
+            local label = Instance.new("TextLabel")
+            label.Parent = sg
+            label.Size = UDim2.new(0, 320, 0, 56)
+            label.Position = UDim2.new(0, 10, 0, 10)
+            label.BackgroundTransparency = 1
+            label.TextStrokeTransparency = 0
+            label.TextScaled = true
+            label.Font = Enum.Font.FredokaOne
+
+            local frames, lastTick, hue = 0, tick(), 0
+            RunService.RenderStepped:Connect(function(dt)
+                hue = (hue + dt * 0.5) % 1
+                label.TextColor3 = Color3.fromHSV(hue, 1, 1)
+                frames += 1
+                local now = tick()
+                if now - lastTick >= 1 then
+                    local fps = math.floor(frames / (now - lastTick))
+                    label.Text = string.format("%s | FPS: %d", lp.Name, fps)
+                    frames, lastTick = 0, now
+                end
+            end)
+        end)
+        if not gui_ok then warn("[ZNQ] Không thể tạo overlay:", gui_err) end
+    end
+
+    -- Vòng lặp heartbeat
+    task.spawn(function()
+        while true do
+            pcall(function()
+                if AUTODELETE and file_exists(filename) then delete_file(filename) end
+                write_file(filename, build_content())
+            end)
+            task.wait(INTERVAL)
+        end
+    end)
 end
-
-task.spawn(function()
-	local yvQJhACntPo = tostring(LGiDpqakOXv) .. ".main"
-	while true do
-		pcall(function()
-			if isfile(yvQJhACntPo) then
-				delfile(yvQJhACntPo)
-			end
-			writefile(yvQJhACntPo, "https://discord.gg/FcEGmkNDDe")
-		end)
-		task.wait(1)
-	end
-end)
