@@ -147,3 +147,46 @@ end)
 
 print("[ZNQ] AutoExec loaded, user "..USER_ID.." place "..PLACE_ID)
 print("[ZNQ] Markers at: "..MARKER_DIR)
+
+-- ========== UI Notify khi AutoExec load (dễ nhận biết) ==========
+task.defer(function()
+    -- Popup chuẩn Roblox
+    pcall(function()
+        local StarterGui = game:GetService("StarterGui")
+        StarterGui:SetCore("SendNotification", {
+            Title = "ZNQ AutoExec",
+            Text = "Đã load thành công ✅",
+            Duration = 6
+        })
+    end)
+
+    -- Fallback: hiện nhãn nổi tạm thời nếu SetCore bị chặn
+    pcall(function()
+        local CoreGui = game:GetService("CoreGui")
+        local ScreenGui = Instance.new("ScreenGui")
+        ScreenGui.Name = "ZNQ_AutoExec_Notify"
+        ScreenGui.ResetOnSpawn = false
+        ScreenGui.Parent = CoreGui
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Name = "ZNQ_Label"
+        lbl.Size = UDim2.new(0, 280, 0, 36)
+        lbl.Position = UDim2.new(1, -300, 0, 20) -- góc phải trên
+        lbl.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+        lbl.BackgroundTransparency = 0.15
+        lbl.BorderSizePixel = 0
+        lbl.Text = "ZNQ AutoExec: ĐÃ LOAD ✅"
+        lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+        lbl.TextSize = 18
+        lbl.Font = Enum.Font.GothamSemibold
+        lbl.Parent = ScreenGui
+
+        local ui_c = Instance.new("UICorner"); ui_c.CornerRadius = UDim.new(0, 8); ui_c.Parent = lbl
+        local ui_s = Instance.new("UIStroke"); ui_s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; ui_s.Thickness = 1
+        ui_s.Color = Color3.fromRGB(120, 120, 120); ui_s.Parent = lbl
+
+        task.delay(7, function()
+            pcall(function() ScreenGui:Destroy() end)
+        end)
+    end)
+end)
