@@ -1,192 +1,134 @@
--- ZNQ AutoExec v1.1
--- Lưu file marker trong thư mục Download/ZNQ_Markers
---  - Heartbeat:  <uid>.heartbeat
---  - State:      <uid>.state  (JSON: JOINED_OK / DISCONNECT / v.v.)
---  - Main flag:  <uid>.main   (executor đã load)
---
--- Không gửi HTTP, chỉ ghi file -> tool ngoài (Termux/1.py) đọc.
--- ------------------------------------------------------------
+-- ZNQ Check Script (lean)
+-- Phù hợp autoexec đa-executor, không phụ thuộc http_request
+-- Tùy chỉnh qua getgenv():
+--   getgenv().disable_ui = true/false
+--   getgenv().ZNQ_CFG = { marker_dir = "ZNQ", update_interval = 2 }
 
--- ========== Cấu hình ==========
-local MARKER_DIR = "/storage/emulated/0/Download/ZNQ_Markers/"
-local HEARTBEAT_INTERVAL   = 5
-local FREEZE_GAP_SEC       = 12
-local SOFT_REJOIN_COOLDOWN = 20
-local JOINED_OK_DELAY      = 5
-local CREATE_EXECUTOR_MAIN = true
-
--- ========== Roblox Services ==========
 local Players = game:GetService("Players")
-local TS      = game:GetService("TeleportService")
-local Run     = game:GetService("RunService")
-local Hs      = game:GetService("HttpService")
-local CoreGui = game:GetService("CoreGui")
+local RunService = game:GetService("RunService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
 
-local lp = Players.LocalPlayer
-local USER_ID  = tostring(lp and lp.UserId or 0)
-local PLACE_ID = game.PlaceId
-
--- ========== File API ==========
-local _isfile = isfile or function(path)
-    local ok, res = pcall(readfile, path)
-    return ok and type(res)=="string"
-end
-local _readfile = readfile or function(path)
-    local ok, res = pcall(function() return readfile(path) end)
-    return ok and res or nil
-end
-local _writefile = writefile or function(path, txt)
-    warn("[ZNQ] writefile not available -> skip: "..path)
-end
-local _makefolder = makefolder or function(path)
-    pcall(function() _writefile(path.."/.__znq_probe","x") end)
+local LP = Players.LocalPlayer
+if not LP then
+    repeat task.wait() until Players.LocalPlayer
+    LP = Players.LocalPlayer
 end
 
-local function ensure_dir(path)
-    if path:sub(-1) ~= "/" then path = path.."/" end
-    local testf = path.."__znq_ok"
-    if not _isfile(testf) then
-        _makefolder(path)
-        _writefile(testf,"ok")
-    end
-end
+local G = getgenv and getgenv() or _G
+local CFG = (G.ZNQ_CFG and type(G.ZNQ_CFG) == "table") and G.ZNQ_CFG or {}
+local DISABLE_UI = (G.disable_ui == true)
 
-local function json_encode(tbl)
-    local ok,res = pcall(function() return Hs:JSONEncode(tbl) end)
-    return ok and res or "{}"
-end
+local MARKER_DIR = tostring(CFG.marker_dir or "ZNQ")
+local UPDATE_INTERVAL = tonumber(CFG.update_interval or 2)
+if UPDATE_INTERVAL < 1 then UPDATE_INTERVAL = 1 end
 
--- ========== Marker Files ==========
-ensure_dir(MARKER_DIR)
-local HB_FILE   = MARKER_DIR..USER_ID..".heartbeat"
-local ST_FILE   = MARKER_DIR..USER_ID..".state"
-local MAIN_FILE = MARKER_DIR..USER_ID..".main"
+-- Trạng thái chung để Python có thể đọc nếu cần (qua remote debug)
+G.ZNQ_STATE = {
+    username = LP and LP.Name or "Unknown",
+    userId   = LP and LP.UserId or 0,
+    placeId  = game.PlaceId,
+    jobId    = game.JobId,
+    startTs  = os.time()
+}
 
-if CREATE_EXECUTOR_MAIN and not _isfile(MAIN_FILE) then
-    _writefile(MAIN_FILE,"1")
-end
+-- ========= UI gọn =========
+local function mount_gui()
+    local ok, gui = pcall(function()
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "ZNQ_UI"
+        sg.ResetOnSpawn = false
 
--- ========== Heartbeat ==========
-local function write_heartbeat()
-    pcall(function() _writefile(HB_FILE, tostring(os.time())) end)
-end
-task.spawn(function()
-    while task.wait(HEARTBEAT_INTERVAL) do write_heartbeat() end
-end)
-
--- ========== Ghi state ==========
-local function set_state(state, reason)
-    local payload = { state=state, reason=reason or "", ts=os.time() }
-    local j = json_encode(payload)
-    _writefile(ST_FILE, j)
-end
-
--- ========== Freeze detect ==========
-local lastBeat = os.clock()
-Run.Heartbeat:Connect(function() lastBeat = os.clock() end)
-task.spawn(function()
-    while task.wait(HEARTBEAT_INTERVAL) do
-        if os.clock() - lastBeat > FREEZE_GAP_SEC then
-            set_state("FREEZE_SUSPECT","heartbeat gap")
+        -- ưu tiên gethui nếu có
+        local parent = (gethui and gethui()) or game:FindFirstChildOfClass("CoreGui")
+        if not parent then
+            parent = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui")
         end
-    end
-end)
+        if syn and syn.protect_gui then pcall(syn.protect_gui, sg) end
+        sg.Parent = parent
 
--- ========== Mark JOINED_OK ==========
-local function mark_joined_ok()
-    task.delay(JOINED_OK_DELAY,function()
-        set_state("JOINED_OK","Spawned")
-    end)
-end
-if lp.Character then mark_joined_ok() end
-lp.CharacterAdded:Connect(mark_joined_ok)
+        -- nếu đã có cũ thì dọn
+        local old = parent:FindFirstChild("ZNQ_UI")
+        if old and old ~= sg then pcall(function() old:Destroy() end) end
 
--- ========== Soft Rejoin ==========
-local lastSoft = 0
-local function soft_rejoin(reason)
-    if os.clock() - lastSoft < SOFT_REJOIN_COOLDOWN then return end
-    lastSoft = os.clock()
-    set_state("SOFT_REJOIN_TRY", reason or "")
-    task.spawn(function()
-        local ok,err = pcall(function() TS:Teleport(PLACE_ID,lp) end)
-        if not ok then set_state("DISCONNECT","TeleportFail:"..tostring(err)) end
-    end)
-end
+        local label = Instance.new("TextLabel")
+        label.Name = "ZNQ_Label"
+        label.Parent = sg
+        label.Size = UDim2.new(0, 360, 0, 48)
+        label.Position = UDim2.new(0, 10, 0, 10)
+        label.BackgroundTransparency = 0.25
+        label.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
+        label.TextColor3 = Color3.new(1,1,1)
+        label.TextStrokeTransparency = 0.3
+        label.Font = Enum.Font.GothamBold
+        label.TextScaled = true
+        label.Text = "ZNQ • " .. tostring(LP.Name) .. " (" .. tostring(LP.UserId) .. ")"
 
--- ========== Prompt/Kick/Disconnect hook ==========
-local function looks_bad(txt)
-    if not txt or #txt==0 then return false end
-    txt = txt:lower()
-    local patterns={"disconnect","lost connection","kicked","error","teleport failed","unexpected error","reconnect"}
-    for _,p in ipairs(patterns) do if txt:find(p,1,true) then return true end end
-    return false
-end
-
-local function scan_gui(gui)
-    for _,d in ipairs(gui:GetDescendants()) do
-        if d:IsA("TextLabel") or d:IsA("TextButton") then
-            local txt = d.Text or ""
-            if looks_bad(txt) then soft_rejoin("Prompt:"..txt) end
-            d:GetPropertyChangedSignal("Text"):Connect(function()
-                if looks_bad(d.Text) then soft_rejoin("Prompt:"..d.Text) end
-            end)
-        end
-    end
-end
-
-task.defer(function()
-    for _,c in ipairs(CoreGui:GetChildren()) do scan_gui(c) end
-    CoreGui.ChildAdded:Connect(scan_gui)
-end)
-
--- ========== TeleportFail ==========
-TS.TeleportInitFailed:Connect(function(_,res,msg)
-    set_state("TELEPORT_FAIL",tostring(res)..":"..tostring(msg))
-    soft_rejoin("TeleportInitFailed")
-end)
-
-print("[ZNQ] AutoExec loaded, user "..USER_ID.." place "..PLACE_ID)
-print("[ZNQ] Markers at: "..MARKER_DIR)
-
--- ========== UI Notify khi AutoExec load (dễ nhận biết) ==========
-task.defer(function()
-    -- Popup chuẩn Roblox
-    pcall(function()
-        local StarterGui = game:GetService("StarterGui")
-        StarterGui:SetCore("SendNotification", {
-            Title = "ZNQ AutoExec",
-            Text = "Đã load thành công ✅",
-            Duration = 6
-        })
-    end)
-
-    -- Fallback: hiện nhãn nổi tạm thời nếu SetCore bị chặn
-    pcall(function()
-        local CoreGui = game:GetService("CoreGui")
-        local ScreenGui = Instance.new("ScreenGui")
-        ScreenGui.Name = "ZNQ_AutoExec_Notify"
-        ScreenGui.ResetOnSpawn = false
-        ScreenGui.Parent = CoreGui
-
-        local lbl = Instance.new("TextLabel")
-        lbl.Name = "ZNQ_Label"
-        lbl.Size = UDim2.new(0, 280, 0, 36)
-        lbl.Position = UDim2.new(1, -300, 0, 20) -- góc phải trên
-        lbl.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-        lbl.BackgroundTransparency = 0.15
-        lbl.BorderSizePixel = 0
-        lbl.Text = "ZNQ AutoExec: ĐÃ LOAD ✅"
-        lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
-        lbl.TextSize = 18
-        lbl.Font = Enum.Font.GothamSemibold
-        lbl.Parent = ScreenGui
-
-        local ui_c = Instance.new("UICorner"); ui_c.CornerRadius = UDim.new(0, 8); ui_c.Parent = lbl
-        local ui_s = Instance.new("UIStroke"); ui_s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; ui_s.Thickness = 1
-        ui_s.Color = Color3.fromRGB(120, 120, 120); ui_s.Parent = lbl
-
-        task.delay(7, function()
-            pcall(function() ScreenGui:Destroy() end)
+        local frames, lastTick = 0, tick()
+        RunService.RenderStepped:Connect(function(dt)
+            frames += 1
+            local now = tick()
+            if now - lastTick >= 1 then
+                local fps = math.floor(frames / (now - lastTick) + 0.5)
+                frames, lastTick = 0, now
+                label.Text = ("ZNQ • %s (%d)  |  FPS: %d")
+                    :format(LP.Name, LP.UserId, fps)
+            end
         end)
+
+        return sg
+    end)
+    return ok and gui
+end
+
+if not DISABLE_UI then
+    pcall(mount_gui)
+end
+
+-- ========= Marker writer =========
+local has_io = (typeof(writefile) == "function") and (typeof(makefolder) == "function")
+if has_io then
+    pcall(function()
+        if not isfolder(MARKER_DIR) then makefolder(MARKER_DIR) end
+    end)
+
+    task.spawn(function()
+        while task.wait(UPDATE_INTERVAL) do
+            local payload = {
+                username = LP.Name,
+                userId   = LP.UserId,
+                placeId  = game.PlaceId,
+                jobId    = game.JobId,
+                ts       = os.time()
+            }
+            local ok, json = pcall(HttpService.JSONEncode, HttpService, payload)
+            if ok then
+                pcall(writefile, string.format("%s/%d.json", MARKER_DIR, LP.UserId), json)
+            end
+        end
+    end)
+end
+
+-- ========= Hotkeys rejoin =========
+pcall(function()
+    local UIS = game:GetService("UserInputService")
+    UIS.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.F8 then
+            -- Rejoin game (mới)
+            pcall(TeleportService.Teleport, TeleportService, game.PlaceId, LP)
+        elseif input.KeyCode == Enum.KeyCode.F9 then
+            -- Về đúng server hiện tại
+            pcall(TeleportService.TeleportToPlaceInstance, TeleportService, game.PlaceId, game.JobId, LP)
+        end
     end)
 end)
+
+-- (Optional) expose 1 hàm tiện ích:
+G.ZNQ_Rejoin = function(same_server)
+    if same_server then
+        pcall(TeleportService.TeleportToPlaceInstance, TeleportService, game.PlaceId, game.JobId, LP)
+    else
+        pcall(TeleportService.Teleport, TeleportService, game.PlaceId, LP)
+    end
+end
