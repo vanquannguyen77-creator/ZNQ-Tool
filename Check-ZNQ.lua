@@ -1,132 +1,99 @@
--- ZNQ Check (AutoExecute) - v2.6-notify
+-- ZNQ Heartbeat Script (v4.0)
 -- Tác giả: ZNQ
--- Công dụng: heartbeat + thực thi lệnh join/rejoin qua ZNQ/cmd.json
--- Có thông báo trong game để dễ kiểm tra
+-- Công dụng: Chỉ tạo file heartbeat để tool Python có thể phát hiện trạng thái và chờ đợi.
+-- Tương thích hoàn toàn với cơ chế Sequential Launch của ZNQ Tool v4.0.
 
+-- Cấu hình
 getgenv().ZNQ_CFG = getgenv().ZNQ_CFG or {
-    heartbeat_interval = 1.5,
-    cmd_poll_interval  = 1.0,
-    verbose_log        = false,
-    notify             = true,   -- Bật/tắt notify
+    heartbeat_interval = 2.0, -- Gửi tín hiệu mỗi 2 giây
+    notify             = true,   -- Bật/tắt thông báo trong game
 }
 
--- ===== Notify helper =====
+-- ===== Hàm thông báo (Notify helper) =====
 local function notify(title, text, dur)
     if not getgenv().ZNQ_CFG.notify then return end
     pcall(function()
         game:GetService("StarterGui"):SetCore("SendNotification", {
             Title = title or "ZNQ",
             Text  = text or "",
-            Duration = dur or 3
+            Duration = dur or 4
         })
     end)
 end
 
--- ===== Executor FS wrappers =====
-local has = function(x) return type(x) ~= "nil" end
-local _isfile   = isfile or (has(is_file) and is_file) or function(p) return false end
-local _isfolder = isfolder or (has(is_folder) and is_folder) or function(p) return false end
-local _makefolder = makefolder or (has(make_folder) and make_folder) or function(p) end
-local _readfile = readfile or (has(read_file) and read_file) or function(p) return nil end
-local _writefile = writefile or (has(write_file) and write_file) or function(p, d) end
-local _delfile  = delfile or (has(deletefile) and deletefile) or function(p) end
-local _listfiles = listfiles or (has(list_files) and list_files)
+-- ===== Các hàm đọc/ghi file của Executor =====
+local _isfolder = isfolder or is_folder
+local _makefolder = makefolder or make_folder
+local _writefile = writefile or write_file
 
-local function log(...) if getgenv().ZNQ_CFG.verbose_log then print("[ZNQ]", ...) end end
-
--- ===== Roblox services =====
+-- ===== Lấy thông tin người chơi và các dịch vụ Roblox =====
 local HttpService = game:GetService("HttpService")
-local TeleportService = game:GetService("TeleportService")
 local Players = game:GetService("Players")
-local lp = Players.LocalPlayer or Players.PlayerAdded:Wait()
-local uid = tostring(lp.UserId or 0)
+local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local uid = tostring(LocalPlayer.UserId or 0)
 
--- ===== Tìm thư mục ZNQ =====
-local function testWritable(dir)
-    local ok=false; pcall(function()
-        if not _isfolder(dir) then _makefolder(dir) end
-        local tf = dir.."/.znq_w"
-        _writefile(tf,"ok"); ok=_isfile(tf); _delfile(tf)
-    end)
-    return ok
-end
+-- ===== Tìm thư mục ZNQ có thể ghi =====
+local ZNQ_DIR = nil
+local function find_znq_directory()
+    -- Các đường dẫn có khả năng chứa thư mục ZNQ
+    local potential_paths = {
+        "/data/data/" .. game:GetService("CoreGui").RobloxGui.PackageName .. "/files/ZNQ",
+        "/storage/emulated/0/Android/data/" .. game:GetService("CoreGui").RobloxGui.PackageName .. "/files/ZNQ",
+        "/sdcard/Android/data/" .. game:GetService("CoreGui").RobloxGui.PackageName .. "/files/ZNQ"
+    }
 
-local function pickZNQ()
-    local forced = rawget(getgenv(),"ZNQ_FORCE_ZNQ_DIR")
-    if type(forced)=="string" and #forced>0 and testWritable(forced) then return forced end
-
-    local pkgs={"com.roblox.client","com.roblox.client64"}
-    local bases={"/storage/emulated/0/Android/data","/sdcard/Android/data","/data/data"}
-    for _,base in ipairs(bases) do
-        for _,pkg in ipairs(pkgs) do
-            local d=base.."/"..pkg.."/files/ZNQ"
-            if testWritable(d) then return d end
+    for _, path in ipairs(potential_paths) do
+        local success, _ = pcall(function()
+            if not _isfolder(path) then
+                _makefolder(path)
+            end
+            -- Thử ghi một file tạm để chắc chắn có quyền
+            _writefile(path .. "/.znq_w", "test")
+        end)
+        if success then
+            return path
         end
     end
-    return testWritable("ZNQ") and "ZNQ" or nil
+    return nil -- Trả về nil nếu không tìm thấy thư mục nào có thể ghi
 end
 
-local ZNQ_DIR = pickZNQ()
+ZNQ_DIR = find_znq_directory()
+
 if not ZNQ_DIR then
-    notify("ZNQ Check","Không tìm thấy thư mục ZNQ",6)
-    return
+    notify("ZNQ Heartbeat", "Lỗi: Không tìm thấy hoặc không có quyền ghi vào thư mục ZNQ.", 10)
+    return -- Dừng script nếu không tìm thấy thư mục ZNQ
 end
 
-notify("ZNQ Check","Đã khởi động! UID="..uid,5)
-log("ZNQ_DIR=",ZNQ_DIR)
+notify("ZNQ Heartbeat", "Đã khởi động! Bắt đầu gửi tín hiệu. UID: " .. uid, 5)
 
--- ===== Heartbeat =====
-local hb_path = ZNQ_DIR.."/"..uid..".json"
-local function writeHeartbeat()
-    local payload={uid=uid,t=os.time(),placeId=game.PlaceId,jobId=game.JobId}
-    local ok,data=pcall(function() return HttpService:JSONEncode(payload) end)
-    if ok then pcall(function() _writefile(hb_path,data) end) end
-end
+-- ===== Chức năng chính: Ghi Heartbeat =====
+local heartbeat_path = ZNQ_DIR .. "/" .. uid .. ".json"
 
--- ===== Cmd runner =====
-local cmd_path = ZNQ_DIR.."/cmd.json"
-local function readCmd()
-    if not _isfile(cmd_path) then return nil end
-    local ok,text=pcall(function() return _readfile(cmd_path) end)
-    if not ok or not text or #text==0 then return nil end
-    local ok2,obj=pcall(function() return HttpService:JSONDecode(text) end)
-    return ok2 and obj or nil
-end
-
-local function doJoin(placeId, jobId)
-    if typeof(placeId)~="number" then return end
-    notify("ZNQ","Join game "..placeId,4)
-    if jobId and #jobId>0 then
-        TeleportService:TeleportToPlaceInstance(placeId,jobId,lp)
-    else
-        TeleportService:Teleport(placeId,lp)
+local function write_heartbeat()
+    -- Tạo một bảng (table) chứa thông tin trạng thái
+    local payload = {
+        uid = uid,
+        timestamp = os.time(),
+        placeId = game.PlaceId,
+        jobId = game.JobId
+    }
+    
+    -- Chuyển đổi bảng thành chuỗi JSON
+    local success, json_data = pcall(function()
+        return HttpService:JSONEncode(payload)
+    end)
+    
+    -- Ghi chuỗi JSON vào file
+    if success then
+        pcall(_writefile, heartbeat_path, json_data)
     end
 end
 
-local function doRejoin(same)
-    local pid=game.PlaceId
-    if same and game.JobId and #game.JobId>0 then
-        notify("ZNQ","Rejoin same server",4)
-        TeleportService:TeleportToPlaceInstance(pid,game.JobId,lp)
-    else
-        notify("ZNQ","Rejoin place "..pid,4)
-        TeleportService:Teleport(pid,lp)
+-- ===== Vòng lặp chính =====
+-- Tạo một luồng (thread) mới để chạy vòng lặp vô hạn mà không làm treo game
+task.spawn(function()
+    while task.wait(getgenv().ZNQ_CFG.heartbeat_interval) do
+        -- Sử dụng pcall để đảm bảo game không bị crash nếu có lỗi xảy ra
+        pcall(write_heartbeat)
     end
-end
-
-local function processCmd()
-    local obj=readCmd(); if not obj then return end
-    local a=(tostring(obj.action or ""):lower())
-    if a=="join" then doJoin(tonumber(obj.place_id or obj.placeId),obj.job_id or obj.jobId)
-    elseif a=="rejoin" then doRejoin(obj.same_server or obj.sameServer)
-    else notify("ZNQ","Lệnh không hợp lệ",3) end
-    pcall(function() _delfile(cmd_path) end)
-end
-
--- ===== Loops =====
-task.spawn(function()
-    while task.wait(getgenv().ZNQ_CFG.heartbeat_interval) do pcall(writeHeartbeat) end
-end)
-task.spawn(function()
-    while task.wait(getgenv().ZNQ_CFG.cmd_poll_interval) do pcall(processCmd) end
 end)
