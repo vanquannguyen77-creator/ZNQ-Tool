@@ -1,122 +1,152 @@
--- ZNQ Check Script – with command watcher
--- Vẫn dùng getgenv().disable_ui = true/false như trước
--- Thêm cơ chế đọc lệnh từ ZNQ/cmd.json trong workspace để Teleport (bỏ deep-link)
+-- ZNQ Check (Rokid-compatible) - by ZNQ
+-- Mục tiêu:
+-- 1) Ghi marker định kỳ: ZNQ/<UserId>.json  (username, userId, placeId, jobId, ts)
+-- 2) Lắng nghe lệnh từ tool: ZNQ/cmd.json   ({action="rejoin", same_server=true/false})
+-- 3) Hotkeys (tuỳ chọn): F8 (rejoin server cũ), F9 (rejoin server mới)
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local TeleportService = game:GetService("TeleportService")
+-- ================== CẤU HÌNH NHANH ==================
+getgenv().ZNQ_CFG = getgenv().ZNQ_CFG or {
+    marker_dir      = "ZNQ",     -- Thư mục làm việc chung với tool
+    update_interval = 2,         -- giây: tần suất cập nhật marker
+    enable_hotkeys  = true       -- F8/F9
+}
+
+getgenv().disable_ui = getgenv().disable_ui or false -- Nếu executor có overlay UI, cho phép ẩn
+
+-- ============== TIỆN ÍCH & KIỂM TRA API =============
 local HttpService = game:GetService("HttpService")
-local UIS = game:GetService("UserInputService")
+local Players     = game:GetService("Players")
+local TPService   = game:GetService("TeleportService")
+local UIS         = game:GetService("UserInputService")
 
-local LP = Players.LocalPlayer; while not LP do task.wait() LP = Players.LocalPlayer end
-local G = getgenv and getgenv() or _G
-local CFG = (G.ZNQ_CFG and type(G.ZNQ_CFG)=="table") and G.ZNQ_CFG or {}
-local DISABLE_UI = (G.disable_ui == true)
+local function has(fn) return type(fn) == "function" end
+
+local _isfile    = has(isfile)    and isfile    or function(_) return false end
+local _isfolder  = has(isfolder)  and isfolder  or function(_) return false end
+local _makefolder= has(makefolder)and makefolderor function(_) end
+local _writefile = has(writefile) and writefile or function(_) end
+local _readfile  = has(readfile)  and readfile  or function(_) return nil end
+local _delfile   = has(delfile)   and delfile   or function(_) end
+
+-- ============== LẤY THÔNG TIN NGƯỜI CHƠI =============
+local function safeGetLocalPlayer()
+    local plr = Players.LocalPlayer or Players.PlayerAdded:Wait()
+    -- Ensure Character & Id sẵn sàng
+    if not plr.Character then plr.CharacterAdded:Wait() end
+    return plr
+end
+
+local function getSnapshot()
+    local plr = safeGetLocalPlayer()
+    local userId   = tostring(plr.UserId or 0)
+    local username = tostring(plr.Name or "Unknown")
+    local placeId  = tostring(game.PlaceId or 0)
+    local jobId    = tostring(game.JobId or "")
+    return {
+        username = username,
+        userId   = userId,
+        placeId  = placeId,
+        jobId    = jobId,
+        ts       = os.time()
+    }
+end
+
+-- ============== GHI MARKER ĐỊNH KỲ ===================
+local CFG = getgenv().ZNQ_CFG
 local MARKER_DIR = tostring(CFG.marker_dir or "ZNQ")
-local UPDATE_INTERVAL = tonumber(CFG.update_interval or 2); if UPDATE_INTERVAL < 1 then UPDATE_INTERVAL = 1 end
+local UPDATE_INTERVAL = tonumber(CFG.update_interval or 2)
 
--- ===== UI gọn (như trước) =====
-local function mount_gui()
-    local ok, gui = pcall(function()
-        local sg = Instance.new("ScreenGui")
-        sg.Name = "ZNQ_UI"; sg.ResetOnSpawn = false
-        local parent = (gethui and gethui()) or game:FindFirstChildOfClass("CoreGui")
-        if not parent then parent = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui") end
-        if syn and syn.protect_gui then pcall(syn.protect_gui, sg) end
-        local old = parent:FindFirstChild("ZNQ_UI"); if old and old~=sg then pcall(function() old:Destroy() end) end
-        sg.Parent = parent
+local function ensureWorkspace()
+    if not _isfolder(MARKER_DIR) then
+        _makefolder(MARKER_DIR)
+    end
+end
 
-        local label = Instance.new("TextLabel")
-        label.Name="ZNQ_Label"; label.Parent=sg
-        label.Size=UDim2.new(0,360,0,48); label.Position=UDim2.new(0,10,0,10)
-        label.BackgroundTransparency=0.25; label.BackgroundColor3=Color3.new(0.1,0.1,0.1)
-        label.TextColor3=Color3.new(1,1,1); label.TextStrokeTransparency=0.3
-        label.Font=Enum.Font.GothamBold; label.TextScaled=true
-        label.Text=("ZNQ • %s (%d)"):format(LP.Name, LP.UserId)
-
-        local frames, last = 0, tick()
-        RunService.RenderStepped:Connect(function()
-            frames += 1
-            local now = tick()
-            if now-last >= 1 then
-                local fps = math.floor(frames/(now-last)+0.5)
-                frames, last = 0, now
-                label.Text = ("ZNQ • %s (%d)  |  FPS: %d"):format(LP.Name, LP.UserId, fps)
-            end
-        end)
-        return sg
+local function writeMarker()
+    pcall(function()
+        ensureWorkspace()
+        local snap = getSnapshot()
+        local fname = string.format("%s/%s.json", MARKER_DIR, snap.userId)
+        _writefile(fname, HttpService:JSONEncode(snap))
     end)
-    return ok and gui
 end
-if not DISABLE_UI then pcall(mount_gui) end
 
--- ===== Marker writer như trước =====
-local function safe_isfile(p) return (typeof(isfile)=="function" and isfile(p)) end
-local function safe_read(p)
-    local ok, data = pcall(function() return readfile(p) end)
-    return ok and data or nil
-end
-local function safe_write(p, data)
-    if typeof(makefolder)=="function" then
-        local dir = p:match("^(.*)/[^/]+$"); if dir then pcall(makefolder, dir) end
-    end
-    pcall(writefile, p, data)
-end
-local function safe_delfile(p) pcall(function() if safe_isfile(p) then delfile(p) end end) end
+-- ============== LẮNG NGHE LỆNH TỪ TOOL ===============
+-- Tool sẽ ghi file ZNQ/cmd.json với nội dung như:
+-- { "action": "rejoin", "same_server": true }
+-- same_server = false  => TeleportToPlaceInstance(placeId, jobId)
+-- same_server = true => Teleport(placeId) (server random)
 
-task.spawn(function()
-    while task.wait(UPDATE_INTERVAL) do
-        local payload = {
-            username = LP.Name, userId = LP.UserId,
-            placeId = game.PlaceId, jobId = game.JobId, ts = os.time()
-        }
-        local ok, json = pcall(HttpService.JSONEncode, HttpService, payload)
-        if ok then safe_write(("%s/%d.json"):format(MARKER_DIR, LP.UserId), json) end
-    end
-end)
+local CMD_FILE = MARKER_DIR.."/cmd.json"
+local last_cmd_raw = ""
 
--- ===== Hotkeys cũ =====
-pcall(function()
-    UIS.InputBegan:Connect(function(input, gpe)
-        if gpe then return end
-        if input.KeyCode == Enum.KeyCode.F8 then
-            pcall(TeleportService.Teleport, TeleportService, game.PlaceId, LP)
-        elseif input.KeyCode == Enum.KeyCode.F9 then
-            pcall(TeleportService.TeleportToPlaceInstance, TeleportService, game.PlaceId, game.JobId, LP)
+local function handleCommand(cmd)
+    if type(cmd) ~= "table" then return end
+    local action = tostring(cmd.action or "")
+    if action == "rejoin" then
+        local same = cmd.same_server == true
+        local snap = getSnapshot()
+        if same and snap.jobId and #snap.jobId > 0 then
+            TPService:TeleportToPlaceInstance(tonumber(snap.placeId), snap.jobId, Players.LocalPlayer)
+        else
+            TPService:Teleport(tonumber(snap.placeId), Players.LocalPlayer)
         end
-    end)
-end)
+    end
+end
 
--- ===== Command watcher (mới) =====
-task.spawn(function()
-    local CMD = MARKER_DIR.."/cmd.json"
-    while task.wait(0.8) do
-        local s = safe_read(CMD)
-        if s and #s > 0 then
-            local ok, obj = pcall(HttpService.JSONDecode, HttpService, s)
-            if ok and type(obj)=="table" and obj.action=="rejoin" then
-                local same = obj.same_server == true
-                local pid  = tonumber(obj.placeId) or game.PlaceId
-                local jid  = tostring(obj.jobId or "") ~= "" and tostring(obj.jobId) or game.JobId
-                if same and jid then
-                    pcall(TeleportService.TeleportToPlaceInstance, TeleportService, pid, jid, LP)
-                else
-                    pcall(TeleportService.Teleport, TeleportService, pid, LP)
+local function pollCommand()
+    pcall(function()
+        if _isfile(CMD_FILE) then
+            local raw = _readfile(CMD_FILE)
+            if raw and #raw > 0 and raw ~= last_cmd_raw then
+                last_cmd_raw = raw
+                local ok, obj = pcall(function() return HttpService:JSONDecode(raw) end)
+                if ok and obj then
+                    handleCommand(obj)
+                    -- tuỳ chọn: xoá lệnh sau khi xử lý để tránh lặp
+                    -- _delfile(CMD_FILE)
                 end
             end
-            safe_delfile(CMD) -- tránh lặp
+        end
+    end)
+end
+
+-- =================== HOTKEYS (tuỳ chọn) ===============
+if CFG.enable_hotkeys and UIS and UIS:IsKeyDown ~= nil then
+    UIS.InputBegan:Connect(function(input, gpe)
+        if gpe or not input.KeyCode then return end
+        local kc = input.KeyCode
+        if kc == Enum.KeyCode.F8 then
+            -- Rejoin cùng server (nếu có jobId)
+            local s = getSnapshot()
+            if s.jobId and #s.jobId > 0 then
+                TPService:TeleportToPlaceInstance(tonumber(s.placeId), s.jobId, Players.LocalPlayer)
+            else
+                TPService:Teleport(tonumber(s.placeId), Players.LocalPlayer)
+            end
+        elseif kc == Enum.KeyCode.F9 then
+            -- Rejoin server mới (random)
+            local s = getSnapshot()
+            TPService:Teleport(tonumber(s.placeId), Players.LocalPlayer)
+        end
+    end)
+end
+
+-- ================== VÒNG LẶP CHÍNH ===================
+task.spawn(function()
+    while true do
+        writeMarker()
+        for _=1, UPDATE_INTERVAL*10 do
+            task.wait(0.1)
+            pollCommand()
         end
     end
 end)
 
--- (API) cho phép tool gọi nếu muốn
-getgenv().ZNQ_Rejoin = function(same_server, placeId, jobId)
-    local same = same_server == true
-    local pid  = tonumber(placeId) or game.PlaceId
-    local jid  = tostring(jobId or "") ~= "" and tostring(jobId) or game.JobId
-    if same and jid then
-        pcall(TeleportService.TeleportToPlaceInstance, TeleportService, pid, jid, LP)
-    else
-        pcall(TeleportService.Teleport, TeleportService, pid, LP)
-    end
+-- ================== UI (tuỳ chọn) =====================
+-- Nếu executor của bạn có API draw UI overlay, bạn có thể thêm.
+-- Ở đây giữ mặc định tắt UI để nhẹ:
+if not getgenv().disable_ui then
+    -- Đặt disable_ui=true nếu không muốn log spam
+    print("[ZNQ] Check Lua started. Marker: "..MARKER_DIR.."/*.json, Cmd: "..CMD_FILE)
 end
