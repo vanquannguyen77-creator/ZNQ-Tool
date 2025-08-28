@@ -31,7 +31,6 @@ local _delfile   = has(delfile)   and delfile   or function(_) end
 -- ============== LẤY THÔNG TIN NGƯỜI CHƠI =============
 local function safeGetLocalPlayer()
     local plr = Players.LocalPlayer or Players.PlayerAdded:Wait()
-    -- Ensure Character & Id sẵn sàng
     if not plr.Character then plr.CharacterAdded:Wait() end
     return plr
 end
@@ -103,8 +102,7 @@ local function pollCommand()
                 local ok, obj = pcall(function() return HttpService:JSONDecode(raw) end)
                 if ok and obj then
                     handleCommand(obj)
-                    -- tuỳ chọn: xoá lệnh sau khi xử lý để tránh lặp
-                    -- _delfile(CMD_FILE)
+                    -- _delfile(CMD_FILE) -- tuỳ bạn có muốn xoá sau khi xử lý không
                 end
             end
         end
@@ -117,7 +115,6 @@ if CFG.enable_hotkeys and UIS and UIS:IsKeyDown ~= nil then
         if gpe or not input.KeyCode then return end
         local kc = input.KeyCode
         if kc == Enum.KeyCode.F8 then
-            -- Rejoin cùng server (nếu có jobId)
             local s = getSnapshot()
             if s.jobId and #s.jobId > 0 then
                 TPService:TeleportToPlaceInstance(tonumber(s.placeId), s.jobId, Players.LocalPlayer)
@@ -125,7 +122,6 @@ if CFG.enable_hotkeys and UIS and UIS:IsKeyDown ~= nil then
                 TPService:Teleport(tonumber(s.placeId), Players.LocalPlayer)
             end
         elseif kc == Enum.KeyCode.F9 then
-            -- Rejoin server mới (random)
             local s = getSnapshot()
             TPService:Teleport(tonumber(s.placeId), Players.LocalPlayer)
         end
@@ -143,10 +139,6 @@ task.spawn(function()
     end
 end)
 
--- ================== UI (tuỳ chọn) =====================
--- Nếu executor của bạn có API draw UI overlay, bạn có thể thêm.
--- Ở đây giữ mặc định tắt UI để nhẹ:
 if not getgenv().disable_ui then
-    -- Đặt disable_ui=true nếu không muốn log spam
     print("[ZNQ] Check Lua started. Marker: "..MARKER_DIR.."/*.json, Cmd: "..CMD_FILE)
 end
